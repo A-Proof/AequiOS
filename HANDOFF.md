@@ -78,3 +78,16 @@ binaries from an existing build — only 6 files are used:
 Session notes: initial implementation on branch `devin/*` → PR on
 `main`. The `website` branch holds the promo site — do not merge into
 `main` without asking.
+
+## 2026-10-11 (later) — Aura desktop v1 on PR #2
+
+- `drivers/desktop.c` (compositor: wallpaper/menubar/dock/window/cursor),
+  `drivers/input.c` (i8042 kbd set-1 via ctrl translation + PS/2 mouse),
+  `framebuffer.c` console-in-rect + text grid; `input_wait_char()` merges
+  kbd/mouse/serial. x86 user faults kill task (139); syscalls EFAULT-check.
+- Gotcha: QEMU PS/2 kbd emits scancode set 2 — enable i8042 cmd-byte
+  bit 0x40 (set2→set1 translation); F0/0x01 alone does NOT work.
+- Gotcha: `glyph_at` must erase cell bg or scroll/repaint overlays strokes.
+- aarch64: compositor renders; input is serial-only (i8042 is x86).
+- Verified: vmtest 14/14 both arches; QMP sendkey + screendump x86_64.
+- Next per ROADMAP M1: preemptive scheduling + tick IRQ (then real apps).
