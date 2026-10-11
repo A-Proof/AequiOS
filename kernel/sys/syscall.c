@@ -11,10 +11,36 @@
 
 static void ret(void *f, s64 v) { uctx_set_ret(f, (u64)v); }
 
+/* every page of [ptr,ptr+n) must be present in the task's map */
+bool user_mem_ok(struct task *t, u64 p, u64 n) {
+    if (!t) return false;
+    if (n == 0) return true;
+    u64 root = task_root(t);
+    for (u64 a = p & ~(PAGE_SIZE - 1); a < p + n; a += PAGE_SIZE)
+        if (!vmm_translate(root, a)) return false;
+    return true;
+}
+
+/* NUL-terminated string whose pages must all be present */
+bool user_str_ok(struct task *t, const char *s) {
+    u64 root = task_root(t);
+    u64 p = (u64)s, checked = ~(u64)0;
+    for (int i = 0; i < 8192; i++, p++) {
+        u64 pg = p & ~(PAGE_SIZE - 1);
+        if (pg != checked) {
+            if (!vmm_translate(root, pg)) return false;
+            checked = pg;
+        }
+        if (!*(const char *)p) return true;
+    }
+    return false;
+}
+
 static s64 sys_write(struct task *t, int fd, const void *buf, size_t n) {
     int v = task_fd_get(t, fd);
     if (v != -2 && fd > 2) return -9 /*EBADF*/;
     if (v >= 0) return -9;
+    if (!user_mem_ok(t, (u64)buf, n)) return -14 /*EFAULT*/;
     const char *s = buf;
     for (size_t i = 0; i < n; i++) printk("%c", s[i]);
     return (s64)n;
@@ -26,14 +52,14 @@ static s64 sys_read(struct task *t, int fd, void *buf, size_t n) {
         char *s = buf;
         size_t i = 0;
         while (i < n) {
-            int c = serial_getc_poll();
-            if (c < 0) continue;
+            int c = input_wait_char();   /* kbd + serial + paints mouse */
             s[i++] = (char)c;
             if (c == '\n') break;
         }
         return (s64)i;
     }
     if (v < 0) return -9;
+    if (!user_mem_ok(t, (u64)buf, n)) return -14 /*EFAULT*/;
     s64 r = vfs_pread(v, buf, n, task_fd_off(t, fd));
     if (r > 0) task_fd_seek(t, fd, task_fd_off(t, fd) + r);
     return r;
@@ -81,6 +107,7 @@ void sys_handle(void *frame) {
         ret(frame, sys_read(t, (int)a0, (void *)a1, a2));
         break;
     case AEQ_SYS_open: {
+        if (!user_str_ok(t, (const char *)a0)) { ret(frame, -14); break; }
         int v = vfs_open((const char *)a0);
         ret(frame, v < 0 ? -2 : task_fd_alloc(t, v));
         break; }
@@ -89,6 +116,7 @@ void sys_handle(void *frame) {
         ret(frame, 0);
         break;
     case AEQ_SYS_spawn:
+        if (!user_str_ok(t, (const char *)a0)) { ret(frame, -14); break; }
         do_spawn(frame, t, (const char *)a0);
         break;
     case AEQ_SYS_exit:
@@ -116,6 +144,7 @@ void sys_handle(void *frame) {
         break;
     case AEQ_SYS_uname: {
         const char *s = "AequiOS/Ordo 0.1 (scratch kernel)";
+        if (!user_mem_ok(t, a0, strlen(s) + 1)) { ret(frame, -14); break; }
         char *d = (char *)a0;
         for (size_t i = 0; s[i]; i++) d[i] = s[i];
         d[strlen(s)] = 0;

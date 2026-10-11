@@ -63,3 +63,12 @@ unblocks and roughly how big it is.
 
 * SMP/multicore, 32-bit compat (`int 0x80` / EABI), kernel modules,
   POSIX-perfect semantics, secure sandboxing of untrusted Linux apps.
+
+## Aura desktop v1 (shipped 2026-10-11)
+
+Gradient wallpaper, menu bar, dock, a draggable terminal window (PS/2
+keyboard + mouse, i8042 polled), and the Ratio shell running inside the
+window. `make run ARCH=x86_64` shows the desktop; the serial console
+remains the headless "server" interface — same kernel, two faces.
+aarch64 ships the same compositor; PS/2 input is x86-only for now
+(serial input remains).

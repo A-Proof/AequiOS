@@ -50,6 +50,7 @@ char  *strcpy(char *d, const char *s);
 char  *strncpy(char *d, const char *s, size_t n);
 void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
+void *memmove(void *d, const void *s, size_t n);
 int    memcmp(const void *a, const void *b, size_t n);
 char  *strchr(const char *s, int c);
 char  *strtok(char *str, const char *delim);
@@ -108,6 +109,24 @@ void vmm_destroy_user_root(u64 root);
 void fb_init(void);
 void fb_putc(char c);
 void fb_splash(void);
+bool fb_ready(void);
+u64  fb_width(void);
+u64  fb_height(void);
+void px(int x, int y, u32 c);
+u32  fb_get(int x, int y);
+void fb_fill_rect(int x, int y, int w, int h, u32 c);
+void fb_text(int x, int y, const char *s, u32 color, int scale);
+void fb_set_console_rect(int x, int y, int w, int h);
+void fb_repaint(void);
+
+/* input + desktop (Aura v1) */
+void input_init(void);
+int  input_getc_poll(void);            /* -1 if no key */
+bool input_poll_mouse(s32 *dx, s32 *dy, u8 *btn);
+int  input_wait_char(void);            /* blocks: kbd/serial + paints mouse */
+void desktop_init(void);
+void desktop_poll_mouse(void);
+bool desktop_running(void);
 
 /* vfs/initramfs */
 int  vfs_init(void);
@@ -140,6 +159,8 @@ u64    task_root(struct task *t);
 /* syscall dispatch (sys/syscall.c) */
 void sys_handle(void *uctx);
 void sys_do_exit(void *frame, int code);
+bool user_mem_ok(struct task *t, u64 ptr, u64 n);
+bool user_str_ok(struct task *t, const char *s);
 
 /* linux compat (sys/linux.c) — returns true if nr handled */
 bool linux_handle(void *uctx, u64 nr, struct task *t);

@@ -46,12 +46,17 @@ void kmain(void) {
     /* framebuffer + splash */
     fb_init();
     fb_splash();
+    input_init();
     printk_console_ready();
 
     printk("AequiOS: Even in Architecture, Design, and Spirit\n");
 
     /* LumenFS v0: initramfs (ustar module) */
     if (vfs_init() != 0) panic("initramfs missing");
+
+    /* desktop chrome — wallpaper, menu bar, dock, terminal window;
+     * the console renders inside the window body */
+    desktop_init();
 
     /* Vita: drop to ring 3 / EL0 into the Ratio shell. */
     struct task *init = task_spawn("/bin/ratio");

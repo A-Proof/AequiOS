@@ -43,6 +43,15 @@ void *memcpy(void *d, const void *s, size_t n) {
     return d;
 }
 
+void *memmove(void *d, const void *s, size_t n) {
+    u8 *dp = d; const u8 *sp = s;
+    if (dp < sp)
+        for (size_t i = 0; i < n; i++) dp[i] = sp[i];
+    else
+        for (size_t i = n; i > 0; i--) dp[i - 1] = sp[i - 1];
+    return d;
+}
+
 int memcmp(const void *a, const void *b, size_t n) {
     const u8 *x = a, *y = b;
     for (size_t i = 0; i < n; i++) {

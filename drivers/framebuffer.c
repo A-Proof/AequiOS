@@ -1,5 +1,9 @@
 /* Aura v0 — framebuffer console + boot splash.
- * Deep-navy background, calm typography, thin teal accent. */
+ * Deep-navy background, calm typography, thin teal accent.
+ *
+ * The console renders inside a settable rectangle (`fb_set_console_rect`)
+ * and keeps a text grid backing so the desktop can repaint the region
+ * after moving a window. */
 #include <kernel.h>
 
 #define FONT_W 8
@@ -14,60 +18,95 @@ static u64 fb_w, fb_h, fb_pitch;         /* pitch in pixels */
 static u32 fg = 0xFFE8ECF1, bg = 0xFF0E1420, accent = 0xFF2BB3A3;
 static int cx, cy;
 static int cols, rows;
-static int origin_y;                     /* pixel y of the console area */
+static int con_x, con_y, con_w, con_h;   /* console rect, pixels */
+static char *con_grid;                   /* cols*rows text backing */
 
-static void px(int x, int y, u32 c) {
+void px(int x, int y, u32 c) {
     if (x < 0 || y < 0 || (u64)x >= fb_w || (u64)y >= fb_h) return;
     fb[y * fb_pitch + x] = c;
 }
 
-static void fill(int x, int y, int w, int h, u32 c) {
+u32 fb_get(int x, int y) {
+    if (!fb || x < 0 || y < 0 || (u64)x >= fb_w || (u64)y >= fb_h) return 0;
+    return fb[y * fb_pitch + x];
+}
+
+void fb_fill_rect(int x, int y, int w, int h, u32 c) {
     for (int j = 0; j < h; j++)
         for (int i = 0; i < w; i++)
             px(x + i, y + j, c);
 }
 
-static void glyph(int x, int y, char c, u32 color, int scale) {
+static void glyph_at(int x, int y, char c, u32 color, int scale) {
     int g = (unsigned char)c - 32;
     if (g < 0 || g >= 95) g = '?' - 32;
+    fb_fill_rect(x, y, FONT_W * scale, FONT_H * scale, bg);
     for (int row = 0; row < FONT_H; row++) {
         u8 bits = font_data[g][row];
         for (int col = 0; col < FONT_W; col++)
             if (bits & (0x80 >> col))
-                fill(x + col * scale, y + row * scale, scale, scale, color);
+                fb_fill_rect(x + col * scale, y + row * scale, scale, scale, color);
     }
 }
 
-static void text(int x, int y, const char *s, u32 color, int scale) {
-    for (; *s; s++) { glyph(x, y, *s, color, scale); x += FONT_W * scale; }
+void fb_text(int x, int y, const char *s, u32 color, int scale) {
+    for (; *s; s++) { glyph_at(x, y, *s, color, scale); x += FONT_W * scale; }
 }
 
 static int text_width(const char *s, int scale) {
     return (int)strlen(s) * FONT_W * scale;
 }
 
+u64 fb_width(void)  { return fb_w; }
+u64 fb_height(void) { return fb_h; }
+bool fb_ready(void) { return fb != NULL; }
+
+void fb_repaint(void); /* fwd */
+
 static void scroll_if_needed(void) {
     if (cy < rows) return;
-    int line_px = FONT_H;
-    int area_y = origin_y;
-    int area_h = (int)fb_h - area_y;
-    u64 lines = (u64)(area_h - line_px);
-    for (u64 y = 0; y < lines; y++)
-        for (u64 x = 0; x < fb_pitch; x++)
-            fb[(area_y + y) * fb_pitch + x] = fb[(area_y + y + line_px) * fb_pitch + x];
-    fill(0, (int)fb_h - line_px, (int)fb_w, line_px, bg);
+    memmove(con_grid, con_grid + cols, (size_t)cols * (rows - 1));
+    for (int x = 0; x < cols; x++)
+        con_grid[(rows - 1) * cols + x] = ' ';
+    fb_repaint();           /* pixels always mirror the grid */
     cy = rows - 1;
 }
 
+void fb_repaint(void) {
+    if (!fb || !con_grid) return;
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            glyph_at(con_x + c * FONT_W, con_y + r * FONT_H,
+                     con_grid[r * cols + c], fg, 1);
+}
+
+void fb_set_console_rect(int x, int y, int w, int h) {
+    con_x = x; con_y = y; con_w = w; con_h = h;
+    cols = w / FONT_W;
+    rows = h / FONT_H;
+    if (!con_grid)
+        con_grid = kmalloc(128 * 48);
+    memset(con_grid, ' ', (size_t)cols * rows);
+    cx = cy = 0;
+}
+
 void fb_putc(char c) {
-    if (!fb) return;
+    if (!fb || !con_grid) return;
     if (c == '\n') { cx = 0; cy++; scroll_if_needed(); return; }
     if (c == '\r') { cx = 0; return; }
     if (c == '\t') { cx = (cx + 8) & ~7; if (cx >= cols) { cx = 0; cy++; } scroll_if_needed(); return; }
-    if (c == '\b') { if (cx) cx--; return; }
+    if (c == '\b') {
+        if (cx) {
+            cx--;
+            con_grid[cy * cols + cx] = ' ';
+            glyph_at(con_x + cx * FONT_W, con_y + cy * FONT_H, ' ', fg, 1);
+        }
+        return;
+    }
     if (cx >= cols) { cx = 0; cy++; }
     scroll_if_needed();
-    glyph(cx * FONT_W, origin_y + cy * FONT_H, c, fg, 1);
+    con_grid[cy * cols + cx] = c;
+    glyph_at(con_x + cx * FONT_W, con_y + cy * FONT_H, c, fg, 1);
     cx++;
 }
 
@@ -89,26 +128,24 @@ void fb_init(void) {
 
 void fb_splash(void) {
     if (!fb) return;
-    fill(0, 0, (int)fb_w, (int)fb_h, bg);
+    fb_fill_rect(0, 0, (int)fb_w, (int)fb_h, bg);
 
     const char *title = "AequiOS";
     int scale = (fb_w > 900) ? 5 : 3;
     int tw = text_width(title, scale);
     int tx = ((int)fb_w - tw) / 2;
     int ty = (int)fb_h / 5;
-    text(tx, ty, title, 0xFFE8ECF1, scale);
+    fb_text(tx, ty, title, 0xFFE8ECF1, scale);
     /* teal 'OS' */
-    text(tx + text_width("Aequi", scale), ty, "OS", accent, scale);
+    fb_text(tx + text_width("Aequi", scale), ty, "OS", accent, scale);
 
     const char *sub = "Even in Architecture, Design, and Spirit";
-    text(((int)fb_w - text_width(sub, 1)) / 2, ty + FONT_H * scale + 12, sub, 0xFF9AA7B4, 1);
+    fb_text(((int)fb_w - text_width(sub, 1)) / 2, ty + FONT_H * scale + 12, sub, 0xFF9AA7B4, 1);
 
     /* accent rule */
     int rule_w = (int)fb_w / 3;
-    fill(((int)fb_w - rule_w) / 2, ty + FONT_H * scale + 44, rule_w, 2, accent);
+    fb_fill_rect(((int)fb_w - rule_w) / 2, ty + FONT_H * scale + 44, rule_w, 2, accent);
 
-    origin_y = ty + FONT_H * scale + 72;
-    cols = (int)fb_w / FONT_W;
-    rows = ((int)fb_h - origin_y) / FONT_H;
-    cx = cy = 0;
+    fb_set_console_rect(0, ty + FONT_H * scale + 72, (int)fb_w,
+                        (int)fb_h - (ty + FONT_H * scale + 72));
 }

@@ -49,6 +49,7 @@ static s64 l_write(struct task *t, int fd, const void *buf, size_t n) {
     int v = task_fd_get(t, fd);
     if (fd >= 1 && fd <= 2) v = -2;
     if (v != -2) return -9;
+    if (!user_mem_ok(t, (u64)buf, n)) return -14 /*EFAULT*/;
     const char *s = buf;
     for (size_t i = 0; i < n; i++) printk("%c", s[i]);
     return (s64)n;
@@ -57,30 +58,34 @@ static s64 l_write(struct task *t, int fd, const void *buf, size_t n) {
 static s64 l_read(struct task *t, int fd, void *buf, size_t n) {
     int v = task_fd_get(t, fd);
     if (fd == 0 || v == -3) {
+        if (!user_mem_ok(t, (u64)buf, n)) return -14 /*EFAULT*/;
         char *s = buf;
         size_t i = 0;
         while (i < n) {
-            int c = serial_getc_poll();
-            if (c < 0) continue;
+            int c = input_wait_char();
             s[i++] = (char)c;
             if (c == '\n') break;
         }
         return (s64)i;
     }
     if (v < 0) return -9;
+    if (!user_mem_ok(t, (u64)buf, n)) return -14 /*EFAULT*/;
     s64 r = vfs_pread(v, buf, n, task_fd_off(t, fd));
     if (r > 0) task_fd_seek(t, fd, task_fd_off(t, fd) + r);
     return r;
 }
 
 static s64 l_open(struct task *t, const char *path) {
+    if (!user_str_ok(t, path)) return -14 /*EFAULT*/;
     int v = vfs_open(path);
     if (v < 0) return -2 /*ENOENT*/;
     int fd = task_fd_alloc(t, v);
     return fd < 0 ? -24 /*EMFILE*/ : fd;
 }
 
-static s64 l_uname(u64 ubuf) {
+static s64 l_uname(struct task *t, u64 ubuf) {
+    if (!user_mem_ok(t, ubuf, sizeof(struct linux_utsname)))
+        return -14 /*EFAULT*/;
     struct linux_utsname *u = (struct linux_utsname *)ubuf;
     memset(u, 0, sizeof(*u));
     strcpy(u->sysname, "AequiOS");
@@ -115,6 +120,8 @@ static s64 l_mmap(struct task *t, u64 addr, u64 len, int prot, int flags) {
 
 static s64 l_writev(struct task *t, int fd, const void *iov, int iovcnt) {
     const struct { void *base; size_t len; } *v = iov;
+    if (!user_mem_ok(t, (u64)iov, (u64)iovcnt * sizeof(*v)))
+        return -14 /*EFAULT*/;
     s64 total = 0;
     for (int i = 0; i < iovcnt; i++) {
         s64 r = l_write(t, fd, v[i].base, v[i].len);
@@ -154,7 +161,7 @@ bool linux_handle(void *frame, u64 nr, struct task *t) {
         l_ret(frame, 0);
         return true;
     case L_uname:
-        l_ret(frame, l_uname(a0));
+        l_ret(frame, l_uname(t, a0));
         return true;
     case L_brk:
         l_ret(frame, l_brk(t, a0));

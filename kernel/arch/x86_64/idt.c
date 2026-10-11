@@ -71,6 +71,16 @@ void exc_dump(u64 *frame) {
                      (unsigned long long)((aux >> 1) & 1),
                      (unsigned long long)((aux >> 2) & 1),
                      (void *)aux);
+    /* a fault in a ring-3 task kills the task, never the kernel —
+     * same policy as aarch64's el0_exception_dump */
+    if (cs == 0x2B) {
+        struct task *p = task_exit_and_resume(139);
+        if (p) {
+            extern void return_to_user(void *);
+            early_printk("[task] fault — killed, resuming parent\n");
+            return_to_user(task_ctx(p));   /* never returns */
+        }
+    }
     panic("unhandled exception");
 }
 
