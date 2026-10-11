@@ -118,6 +118,10 @@ void fb_fill_rect(int x, int y, int w, int h, u32 c);
 void fb_text(int x, int y, const char *s, u32 color, int scale);
 void fb_set_console_rect(int x, int y, int w, int h);
 void fb_repaint(void);
+void fb_dst_set(u32 *pix, u64 pitch, u64 w, u64 h);   /* NULL → real fb */
+u32 *fb_console_surface(int *pitch, int *w, int *h);
+bool fb_console_dirty(void);
+void fb_console_clean(void);
 
 /* input + desktop (Aura v1) */
 void input_init(void);

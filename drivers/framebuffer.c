@@ -20,15 +20,31 @@ static int cx, cy;
 static int cols, rows;
 static int con_x, con_y, con_w, con_h;   /* console rect, pixels */
 static char *con_grid;                   /* cols*rows text backing */
+static u32 *con_surf;                    /* console's own pixel surface */
+static bool con_dirty;
+
+/* retargetable draw destination: the real fb, or an app surface the
+ * compositor blits later. px()/fb_get() always write to g_dst. */
+static u32 *g_dst;
+static u64 g_pitch_px, g_w, g_h;
+
+static void dst_fb(void) {
+    g_dst = (u32 *)fb; g_pitch_px = fb_pitch; g_w = fb_w; g_h = fb_h;
+}
+
+void fb_dst_set(u32 *pix, u64 pitch, u64 w, u64 h) {
+    if (!pix) { dst_fb(); return; }
+    g_dst = pix; g_pitch_px = pitch; g_w = w; g_h = h;
+}
 
 void px(int x, int y, u32 c) {
-    if (x < 0 || y < 0 || (u64)x >= fb_w || (u64)y >= fb_h) return;
-    fb[y * fb_pitch + x] = c;
+    if (!g_dst || x < 0 || y < 0 || (u64)x >= g_w || (u64)y >= g_h) return;
+    g_dst[y * g_pitch_px + x] = c;
 }
 
 u32 fb_get(int x, int y) {
-    if (!fb || x < 0 || y < 0 || (u64)x >= fb_w || (u64)y >= fb_h) return 0;
-    return fb[y * fb_pitch + x];
+    if (!g_dst || x < 0 || y < 0 || (u64)x >= g_w || (u64)y >= g_h) return 0;
+    return g_dst[y * g_pitch_px + x];
 }
 
 void fb_fill_rect(int x, int y, int w, int h, u32 c) {
@@ -61,7 +77,14 @@ u64 fb_width(void)  { return fb_w; }
 u64 fb_height(void) { return fb_h; }
 bool fb_ready(void) { return fb != NULL; }
 
-void fb_repaint(void); /* fwd */
+/* console output goes to con_surf when it exists (the terminal window's
+ * retained surface); the x,y rect is then surface-local (0,0). When the
+ * surface allocation failed we fall back to drawing straight into the fb
+ * at the caller's rect. */
+static void con_target(void) {
+    if (con_surf) fb_dst_set(con_surf, (u64)con_w, (u64)con_w, (u64)con_h);
+    else          dst_fb();
+}
 
 static void scroll_if_needed(void) {
     if (cy < rows) return;
@@ -73,25 +96,46 @@ static void scroll_if_needed(void) {
 }
 
 void fb_repaint(void) {
-    if (!fb || !con_grid) return;
+    if (!con_grid) return;
+    con_target();
     for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++)
             glyph_at(con_x + c * FONT_W, con_y + r * FONT_H,
                      con_grid[r * cols + c], fg, 1);
+    dst_fb();
+    con_dirty = true;
 }
 
+/* compositor view of the console surface; NULL when not available */
+u32 *fb_console_surface(int *pitch, int *w, int *h) {
+    if (!con_surf) return NULL;
+    if (pitch) *pitch = con_w;
+    if (w) *w = con_w;
+    if (h) *h = con_h;
+    return con_surf;
+}
+
+bool fb_console_dirty(void) { return con_dirty; }
+void fb_console_clean(void) { con_dirty = false; }
+
 void fb_set_console_rect(int x, int y, int w, int h) {
-    con_x = x; con_y = y; con_w = w; con_h = h;
+    con_w = w; con_h = h;
     cols = w / FONT_W;
     rows = h / FONT_H;
     if (!con_grid)
         con_grid = kmalloc(128 * 48);
+    if (!con_surf) {
+        con_surf = kmalloc((size_t)w * h * 4);
+        if (con_surf) memset(con_surf, 0, (size_t)w * h * 4);
+    }
+    if (con_surf) { con_x = 0; con_y = 0; }       /* surface-local */
+    else          { con_x = x; con_y = y; }       /* fb fallback   */
     memset(con_grid, ' ', (size_t)cols * rows);
     cx = cy = 0;
 }
 
 void fb_putc(char c) {
-    if (!fb || !con_grid) return;
+    if (!con_grid) return;
     if (c == '\n') { cx = 0; cy++; scroll_if_needed(); return; }
     if (c == '\r') { cx = 0; return; }
     if (c == '\t') { cx = (cx + 8) & ~7; if (cx >= cols) { cx = 0; cy++; } scroll_if_needed(); return; }
@@ -99,15 +143,21 @@ void fb_putc(char c) {
         if (cx) {
             cx--;
             con_grid[cy * cols + cx] = ' ';
+            con_target();
             glyph_at(con_x + cx * FONT_W, con_y + cy * FONT_H, ' ', fg, 1);
+            dst_fb();
+            con_dirty = true;
         }
         return;
     }
     if (cx >= cols) { cx = 0; cy++; }
-    scroll_if_needed();
+    scroll_if_needed();          /* internally: con_target .. dst_fb */
+    con_target();
     con_grid[cy * cols + cx] = c;
     glyph_at(con_x + cx * FONT_W, con_y + cy * FONT_H, c, fg, 1);
     cx++;
+    dst_fb();
+    con_dirty = true;
 }
 
 void fb_init(void) {
@@ -121,6 +171,7 @@ void fb_init(void) {
     fb_w = f->width;
     fb_h = f->height;
     fb_pitch = f->pitch / 4;             /* bytes → pixels (32bpp) */
+    dst_fb();
     early_printk("fb: %llux%llu pitch=%llu bpp=%u\n",
                  (unsigned long long)fb_w, (unsigned long long)fb_h,
                  (unsigned long long)f->pitch, f->bpp);

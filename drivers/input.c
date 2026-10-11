@@ -88,7 +88,7 @@ static void mouse_byte(u8 b) {
     s32 dx = mpkt[1], dy = mpkt[2];
     if (mpkt[0] & 0x10) dx -= 256;              /* x sign */
     if (mpkt[0] & 0x20) dy -= 256;              /* y sign */
-    mouse_dx = dx; mouse_dy = -dy;              /* PS/2 y grows up */
+    mouse_dx += dx; mouse_dy -= dy;             /* accumulate; PS/2 y grows up */
     mouse_btn = mpkt[0] & 0x07;
     mouse_new = true;
 }
@@ -156,6 +156,7 @@ bool input_poll_mouse(s32 *dx, s32 *dy, u8 *btn) {
     i8042_drain();
     if (!mouse_new) return false;
     *dx = mouse_dx; *dy = mouse_dy; *btn = mouse_btn;
+    mouse_dx = mouse_dy = 0;
     mouse_new = false;
     return true;
 }
