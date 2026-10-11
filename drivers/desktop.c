@@ -176,7 +176,7 @@ void desktop_poll_mouse(void) {
     bool pressed = (btn & 1) && !(last_btn & 1);
     bool released = !(btn & 1) && (last_btn & 1);
     if (pressed && cur_y >= win_y && cur_y < win_y + TITLE_H &&
-        cur_x >= win_x && cur_x < win_x) {
+        cur_x >= win_x && cur_x < win_x + win_w) {
         dragging = true;
         drag_dx = cur_x - win_x; drag_dy = cur_y - win_y;
     }
